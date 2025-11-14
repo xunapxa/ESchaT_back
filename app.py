@@ -62,9 +62,15 @@ app.add_middleware(
 
 
 def get_qdrant_client() -> QdrantClient:
+    # 타임아웃 설정 (초 단위)
+    timeout = 30.0
     if QDRANT_API_KEY:
-        return QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
-    return QdrantClient(url=QDRANT_URL)
+        return QdrantClient(
+            url=QDRANT_URL, 
+            api_key=QDRANT_API_KEY,
+            timeout=timeout
+        )
+    return QdrantClient(url=QDRANT_URL, timeout=timeout)
 
 
 def ensure_collection(
@@ -200,9 +206,15 @@ def on_startup() -> None:
         # 컬렉션이 있으면 벡터스토어만 연결 시도 (업서트는 생략)
         _ = get_vectorstore()
         _w("existing collection detected, startup completed without reimport")
-    except Exception:
+    except Exception as exc:
         # 컬렉션이 없거나 연결 실패 시 재생성 및 업서트
-        initialize_db_and_data(EXCEL_PATH)
+        _w(f"Qdrant connection failed: {exc}")
+        _w("Attempting to initialize database...")
+        try:
+            initialize_db_and_data(EXCEL_PATH)
+        except Exception as init_exc:
+            _w(f"Database initialization failed: {init_exc}")
+            _w("Service will start but Qdrant operations will fail until connection is established")
 
 
 @app.post("/admin/init")
