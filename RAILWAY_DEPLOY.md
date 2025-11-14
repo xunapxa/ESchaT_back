@@ -10,27 +10,36 @@
 
 ### 2. Qdrant 서비스 추가 (Railway 템플릿 사용)
 1. 같은 프로젝트에서 **"New"** 버튼 클릭
-2. **"Template"** 또는 **"Database"** 섹션에서 **Qdrant** 선택
-3. 또는 **"Deploy from GitHub"** → Qdrant 공식 저장소 사용
-4. Qdrant 서비스가 자동으로 배포됨
-5. 배포 완료 후 Qdrant 서비스의 **"Variables"** 탭에서 내부 URL 확인
+2. **"Template"** 섹션에서 **Qdrant** 선택
+3. Qdrant 서비스가 자동으로 배포됨
 
-### 3. 환경 변수 설정
-FastAPI 서비스의 환경 변수 설정:
+**중요: Qdrant 서비스 환경 변수 설정**
+Qdrant 서비스의 Variables 탭에서 다음 환경 변수 추가:
 
 ```
-QDRANT_URL=http://qdrant:6333  (같은 프로젝트 내 서비스 간 통신)
+QDRANT__SERVICE__HTTP_HOST=0.0.0.0
+```
+
+이 설정은 IPv6 연결 문제를 해결합니다.
+
+### 3. 환경 변수 설정
+
+**FastAPI 서비스의 환경 변수 설정:**
+
+```
+QDRANT_URL=https://qdrant-production-xxxx.up.railway.app  (공개 URL 사용 권장)
 또는
-QDRANT_URL=your_qdrant_service_url  (Railway가 제공하는 내부 URL)
-QDRANT_API_KEY=  (선택사항, 템플릿에 따라 다를 수 있음)
+QDRANT_URL=http://qdrant:6333  (내부 네트워크 - IPv6 문제로 작동하지 않을 수 있음)
 QDRANT_COLLECTION=qa_collection
-QA_EXCEL_PATH=Q&A.xlsx
+QA_EXCEL_PATH=ESTSoft.xlsx
 DEBUG_WORKFLOW=0
 ```
 
 **참고**: 
-- Railway 내부 서비스 간 통신은 내부 네트워크 사용 (더 빠름)
-- Qdrant 템플릿이 없다면 [Qdrant Cloud](https://cloud.qdrant.io) 사용 가능
+- Railway의 Qdrant는 내부 네트워크 연결에 IPv6 문제가 있을 수 있음
+- **공개 URL 사용을 권장** (더 안정적)
+- Qdrant 서비스의 공개 URL은 `https://서비스이름.up.railway.app` 형식
+- Qdrant Cloud 사용도 가능: [Qdrant Cloud](https://cloud.qdrant.io)
 
 ### 4. 엑셀 파일 업로드
 Railway는 파일 시스템이 임시이므로, 엑셀 파일을 저장소에 포함시키거나:
