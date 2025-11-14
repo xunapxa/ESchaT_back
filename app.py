@@ -35,7 +35,7 @@ APP_NAME = "eschaT-qa-backend"
 load_dotenv(dotenv_path=os.getenv("ENV_FILE", ".env"))
 
 # 환경 변수 (배포/로컬 모두에서 작동)
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_URL = os.getenv("QDRANT_URL", "https://qdrant-production-2c5c.up.railway.app")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "qa_collection")
 EXCEL_PATH = os.getenv("QA_EXCEL_PATH", "Q&A.xlsx")
