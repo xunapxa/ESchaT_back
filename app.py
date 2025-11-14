@@ -63,14 +63,22 @@ app.add_middleware(
 
 def get_qdrant_client() -> QdrantClient:
     # 타임아웃 설정 (초 단위) - Railway는 더 긴 타임아웃 필요
-    timeout = float(os.getenv("QDRANT_TIMEOUT", "60.0"))
+    timeout = float(os.getenv("QDRANT_TIMEOUT", "120.0"))
+    
+    # HTTPS URL인지 확인
+    use_https = QDRANT_URL.startswith("https://")
+    
+    # QdrantClient 설정
+    client_kwargs = {
+        "url": QDRANT_URL,
+        "timeout": timeout,
+        "prefer_grpc": False,  # HTTP만 사용 (HTTPS와 더 호환)
+    }
+    
     if QDRANT_API_KEY:
-        return QdrantClient(
-            url=QDRANT_URL, 
-            api_key=QDRANT_API_KEY,
-            timeout=timeout
-        )
-    return QdrantClient(url=QDRANT_URL, timeout=timeout)
+        client_kwargs["api_key"] = QDRANT_API_KEY
+    
+    return QdrantClient(**client_kwargs)
 
 
 def ensure_collection(
@@ -200,21 +208,33 @@ def on_startup() -> None:
         _w(f"excel file not found at '{EXCEL_PATH}', skipping auto initialization")
         return
 
-    try:
-        client = get_qdrant_client()
-        _ = client.get_collection(collection_name=QDRANT_COLLECTION)
-        # 컬렉션이 있으면 벡터스토어만 연결 시도 (업서트는 생략)
-        _ = get_vectorstore()
-        _w("existing collection detected, startup completed without reimport")
-    except Exception as exc:
-        # 컬렉션이 없거나 연결 실패 시 재생성 및 업서트
-        _w(f"Qdrant connection failed: {exc}")
-        _w("Attempting to initialize database...")
+    # Qdrant 연결 시도 (최대 3번 재시도)
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
         try:
-            initialize_db_and_data(EXCEL_PATH)
-        except Exception as init_exc:
-            _w(f"Database initialization failed: {init_exc}")
-            _w("Service will start but Qdrant operations will fail until connection is established")
+            _w(f"Attempting to connect to Qdrant (attempt {attempt}/{max_retries})...")
+            client = get_qdrant_client()
+            _ = client.get_collection(collection_name=QDRANT_COLLECTION)
+            # 컬렉션이 있으면 벡터스토어만 연결 시도 (업서트는 생략)
+            _ = get_vectorstore()
+            _w("existing collection detected, startup completed without reimport")
+            return
+        except Exception as exc:
+            _w(f"Qdrant connection attempt {attempt} failed: {exc}")
+            if attempt < max_retries:
+                import time
+                wait_time = attempt * 2  # 2초, 4초, 6초 대기
+                _w(f"Waiting {wait_time} seconds before retry...")
+                time.sleep(wait_time)
+            else:
+                # 모든 재시도 실패 시 데이터 초기화 시도
+                _w("All connection attempts failed. Attempting to initialize database...")
+                try:
+                    initialize_db_and_data(EXCEL_PATH)
+                    _w("Database initialized successfully")
+                except Exception as init_exc:
+                    _w(f"Database initialization failed: {init_exc}")
+                    _w("Service will start but Qdrant operations will fail until connection is established")
 
 
 @app.post("/admin/init")
