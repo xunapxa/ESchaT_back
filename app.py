@@ -35,8 +35,8 @@ APP_NAME = "eschaT-qa-backend"
 load_dotenv(dotenv_path=os.getenv("ENV_FILE", ".env"))
 
 # 환경 변수 (배포/로컬 모두에서 작동)
-QDRANT_URL = os.getenv("QDRANT_URL", "https://33730b84-aaaf-43ec-afe5-e76833295247.europe-west3-0.gcp.cloud.qdrant.io")
-QDRANT_API_KEY = os.getenv("QDRANT_API_KEY","eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIn0.Hs4jkv-vbxm2LjTFQCTqJSWYeh1sgEjj1KEC6P9fKzg")
+QDRANT_URL = os.getenv("QDRANT_URL")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "qa_collection")
 EXCEL_PATH = os.getenv("QA_EXCEL_PATH", "Q&A.xlsx")
 # 요구사항 명시 모델 고정
@@ -56,8 +56,10 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=3600,
 )
 
 
@@ -169,7 +171,11 @@ def health() -> Dict[str, Any]:
 def chat(request: ChatRequest) -> ChatResponse:
     question = (request.question or "").strip()
     if not question:
-        raise HTTPException(status_code=400, detail="질문이 필요합니다.")
+        raise HTTPException(
+            status_code=400, 
+            detail="질문이 필요합니다.",
+            headers={"Access-Control-Allow-Origin": "*"}
+        )
 
     _w(f"/chat received question='{question}'")
 
@@ -177,27 +183,34 @@ def chat(request: ChatRequest) -> ChatResponse:
         vs = get_vectorstore()
         results_with_score = vs.similarity_search_with_score(question, k=1)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"검색 실패: {exc}") from exc
+        _w(f"Vector search error: {exc}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"검색 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+            headers={"Access-Control-Allow-Origin": "*"}
+        ) from exc
 
     if not results_with_score:
         _w("no result found for query")
         raise HTTPException(
             status_code=404,
             detail="죄송합니다. 제공된 데이터베이스에서 관련 답변을 찾을 수 없습니다.",
+            headers={"Access-Control-Allow-Origin": "*"}
         )
 
     doc, score = results_with_score[0]
-    SIMILARITY_THRESHOLD = 0.7  # 코사인 거리 기준 (0.75 이상이면 관련 없음)
+    SIMILARITY_THRESHOLD = 0.7  # 코사인 거리 기준 (0.7 미만이면 관련 없음)
 
     if DEBUG_WORKFLOW:
         _w(f"similarity_score={score:.3f}, threshold={SIMILARITY_THRESHOLD}")
 
     if score < SIMILARITY_THRESHOLD:
-        _w(f"score too high ({score:.3f}), rejecting query")
+        _w(f"score too low ({score:.3f}), rejecting query")
         raise HTTPException(
             status_code=404,
             detail="죄송합니다. 질문하신 내용과 관련된 답변을 제공할 수 없습니다. "
             "다른 질문을 해주시면 도와드리겠습니다.",
+            headers={"Access-Control-Allow-Origin": "*"}
         )
 
     answer = doc.metadata.get("answer")
@@ -209,7 +222,9 @@ def chat(request: ChatRequest) -> ChatResponse:
 
     if answer is None:
         raise HTTPException(
-            status_code=500, detail="검색 결과에 유효한 답변 메타데이터가 없습니다."
+            status_code=500, 
+            detail="검색 결과에 유효한 답변 메타데이터가 없습니다.",
+            headers={"Access-Control-Allow-Origin": "*"}
         )
 
     return ChatResponse(
