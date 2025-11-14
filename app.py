@@ -62,8 +62,8 @@ app.add_middleware(
 
 
 def get_qdrant_client() -> QdrantClient:
-    # 타임아웃 설정 (초 단위)
-    timeout = 30.0
+    # 타임아웃 설정 (초 단위) - Railway는 더 긴 타임아웃 필요
+    timeout = float(os.getenv("QDRANT_TIMEOUT", "60.0"))
     if QDRANT_API_KEY:
         return QdrantClient(
             url=QDRANT_URL, 

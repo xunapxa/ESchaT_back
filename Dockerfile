@@ -12,9 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # pip 업그레이드 및 timeout 설정
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# torch CPU 버전 먼저 설치 (명시적 버전으로 안정성 확보)
+# torch CPU 버전 먼저 설치 (sentence-transformers 3.2.1과 호환되는 버전)
 RUN pip install --no-cache-dir --timeout=1000 \
-    torch==2.1.0 --index-url https://download.pytorch.org/whl/cpu
+    torch==2.2.0 --index-url https://download.pytorch.org/whl/cpu
 
 # requirements.txt 복사 및 설치
 COPY requirements.txt .
