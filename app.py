@@ -24,9 +24,13 @@ class ChatRequest(BaseModel):
 
 
 class ChatResponse(BaseModel):
-    answer: str
+    answer: Optional[str] = None
     matched_question: Optional[str] = None
     score: Optional[float] = None
+    confidence: Optional[str] = None  # high, medium, low, needs_confirmation
+    threshold_used: Optional[float] = None
+    needs_confirmation: Optional[bool] = None  # 사용자 확인 필요 여부
+    alternative_questions: Optional[List[str]] = None  # 대안 질문들
 
 
 APP_NAME = "eschaT-qa-backend"
@@ -64,13 +68,10 @@ app.add_middleware(
 
 
 def get_qdrant_client() -> QdrantClient:
-    # 타임아웃 설정 (초 단위) - Railway는 더 긴 타임아웃 필요
+    """Qdrant 클라이언트 생성"""
+    _w("Creating Qdrant client...")
     timeout = float(os.getenv("QDRANT_TIMEOUT", "120.0"))
     
-    # HTTPS URL인지 확인
-    use_https = QDRANT_URL.startswith("https://")
-    
-    # QdrantClient 설정
     client_kwargs = {
         "url": QDRANT_URL,
         "timeout": timeout,
@@ -79,66 +80,77 @@ def get_qdrant_client() -> QdrantClient:
     
     if QDRANT_API_KEY:
         client_kwargs["api_key"] = QDRANT_API_KEY
+        _w("Using API key authentication")
+    else:
+        _w("No API key provided, using unauthenticated connection")
     
+    _w(f"Qdrant URL: {QDRANT_URL}, timeout: {timeout}s")
     return QdrantClient(**client_kwargs)
 
 
-def ensure_collection(
-    client: QdrantClient, collection_name: str, vector_size: int
-) -> None:
-    try:
-        client.get_collection(collection_name=collection_name)
-        return
-    except UnexpectedResponse:
-        pass
-
-    client.recreate_collection(
-        collection_name=collection_name,
-        vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
-    )
-
-
 def build_embeddings() -> SentenceTransformerEmbeddings:
+    """임베딩 모델 생성"""
+    _w(f"Building embeddings with model: {EMBEDDING_MODEL}")
     return SentenceTransformerEmbeddings(model_name=EMBEDDING_MODEL)
 
 
 def initialize_db_and_data(filepath: str) -> Tuple[LCQdrant, int]:
-    _w("=== DB initialization started ===")
-    _w(f"target_excel='{filepath}'")
+    """데이터베이스 초기화 및 데이터 로드"""
+    import time
+    start_time = time.time()
     
-    # 먼저 Qdrant 연결 테스트
-    _w("Testing Qdrant connection before initialization...")
+    _w("=" * 60)
+    _w("=== DB INITIALIZATION START ===")
+    _w(f"Target file: '{filepath}'")
+    
+    # 1. Qdrant 연결 테스트
+    _w("[1/5] Testing Qdrant connection...")
     client = get_qdrant_client()
     try:
-        # 간단한 연결 테스트
-        client.get_collections()
-        _w("Qdrant connection test successful")
+        collections = client.get_collections()
+        _w(f"✓ Qdrant connected. Existing collections: {len(collections.collections)}")
     except Exception as conn_exc:
-        _w(f"Qdrant connection test failed: {conn_exc}")
+        _w(f"✗ Qdrant connection failed: {conn_exc}")
         raise ConnectionError(f"Failed to connect to Qdrant: {conn_exc}") from conn_exc
     
+    # 2. 엑셀 파일 파싱
+    _w("[2/5] Parsing Excel file...")
+    parse_start = time.time()
     df = read_excel_flex(filepath)
     qa_rows = parse_qa_data(df)
-    _w(f"parsed_pairs={len(qa_rows)}")
-
+    parse_time = time.time() - parse_start
+    _w(f"✓ Parsed {len(qa_rows)} Q&A pairs in {parse_time:.3f}s")
+    
     if DEBUG_WORKFLOW and qa_rows:
+        _w("Sample Q&A pair:")
         sample = qa_rows[0]
-        _w(f"sample_pair -> Q: {sample['question']}, A: {sample['answer']}")
+        _w(f"  Q: {sample['question']}")
+        _w(f"  A: {sample['answer'][:80]}...")
 
+    # 3. 문서 생성
+    _w("[3/5] Creating document objects...")
     docs = [
         Document(page_content=it["question"], metadata={"answer": it["answer"]})
         for it in qa_rows
     ]
+    _w(f"✓ Created {len(docs)} documents")
 
+    # 4. 임베딩 모델 로드
+    _w("[4/5] Loading embedding model...")
+    embed_start = time.time()
     embeddings = build_embeddings()
+    embed_time = time.time() - embed_start
+    _w(f"✓ Embedding model loaded in {embed_time:.3f}s")
 
-    # 컬렉션이 있으면 삭제 후 재생성
+    # 5. 컬렉션 재생성 및 데이터 업로드
+    _w("[5/5] Uploading to Qdrant...")
     try:
         client.delete_collection(collection_name=QDRANT_COLLECTION)
-        _w(f"Deleted existing collection '{QDRANT_COLLECTION}'")
+        _w(f"  Deleted existing collection '{QDRANT_COLLECTION}'")
     except Exception:
-        _w(f"Collection '{QDRANT_COLLECTION}' does not exist, creating new one")
+        _w(f"  Collection '{QDRANT_COLLECTION}' does not exist, creating new one")
 
+    upload_start = time.time()
     vs = LCQdrant.from_documents(
         documents=docs,
         embedding=embeddings,
@@ -146,19 +158,26 @@ def initialize_db_and_data(filepath: str) -> Tuple[LCQdrant, int]:
         api_key=QDRANT_API_KEY,
         collection_name=QDRANT_COLLECTION,
     )
-    _w(f"qdrant_collection='{QDRANT_COLLECTION}' upserted={len(docs)}")
-    _w("=== DB initialization finished ===")
+    upload_time = time.time() - upload_start
+    _w(f"✓ Uploaded {len(docs)} documents to Qdrant in {upload_time:.3f}s")
+    
+    total_time = time.time() - start_time
+    _w(f"=== DB INITIALIZATION COMPLETE (Total: {total_time:.3f}s) ===")
+    _w("=" * 60)
 
     return vs, len(docs)
 
 
 def get_vectorstore() -> LCQdrant:
+    """벡터스토어 인스턴스 생성"""
+    _w("Creating vectorstore instance...")
     embeddings = build_embeddings()
     vs = LCQdrant(
         client=get_qdrant_client(),
         collection_name=QDRANT_COLLECTION,
         embeddings=embeddings,
     )
+    _w(f"Vectorstore ready for collection: {QDRANT_COLLECTION}")
     return vs
 
 
@@ -169,21 +188,39 @@ def health() -> Dict[str, Any]:
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest) -> ChatResponse:
+    """챗봇 질의응답 엔드포인트"""
+    import time
+    start_time = time.time()
+    
+    _w("=" * 60)
+    _w("=== CHAT REQUEST START ===")
+    
     question = (request.question or "").strip()
     if not question:
+        _w("ERROR: Empty question received")
         raise HTTPException(
             status_code=400, 
             detail="질문이 필요합니다.",
             headers={"Access-Control-Allow-Origin": "*"}
         )
 
-    _w(f"/chat received question='{question}'")
+    _w(f"[1/5] Received question: '{question}'")
+    _w(f"Question length: {len(question)} chars")
 
+    # 벡터 검색
     try:
+        _w("[2/5] Getting vectorstore...")
         vs = get_vectorstore()
-        results_with_score = vs.similarity_search_with_score(question, k=1)
+        
+        TOP_K = int(os.getenv("TOP_K", "3"))
+        _w(f"[3/5] Performing vector search (k={TOP_K})...")
+        search_start = time.time()
+        results_with_score = vs.similarity_search_with_score(question, k=TOP_K)
+        search_time = time.time() - search_start
+        _w(f"Vector search completed in {search_time:.3f}s")
+        
     except Exception as exc:
-        _w(f"Vector search error: {exc}")
+        _w(f"ERROR: Vector search failed - {type(exc).__name__}: {exc}")
         raise HTTPException(
             status_code=500, 
             detail=f"검색 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
@@ -191,44 +228,78 @@ def chat(request: ChatRequest) -> ChatResponse:
         ) from exc
 
     if not results_with_score:
-        _w("no result found for query")
+        _w("ERROR: No search results found")
         raise HTTPException(
             status_code=404,
             detail="죄송합니다. 제공된 데이터베이스에서 관련 답변을 찾을 수 없습니다.",
             headers={"Access-Control-Allow-Origin": "*"}
         )
 
+    # 결과 분석
+    _w(f"[4/5] Analyzing {len(results_with_score)} search results...")
     doc, score = results_with_score[0]
-    SIMILARITY_THRESHOLD = 0.7  # 코사인 거리 기준 (0.7 미만이면 관련 없음)
-
-    if DEBUG_WORKFLOW:
-        _w(f"similarity_score={score:.3f}, threshold={SIMILARITY_THRESHOLD}")
-
-    if score < SIMILARITY_THRESHOLD:
-        _w(f"score too low ({score:.3f}), rejecting query")
+    answer = doc.metadata.get("answer")
+    matched_question = doc.page_content
+    
+    # 신뢰도 레벨 계산
+    if score >= 0.85:
+        confidence = "high"
+        needs_confirmation = False
+    elif score >= 0.7:
+        confidence = "medium"
+        needs_confirmation = False
+    elif score >= 0.5:
+        confidence = "low"
+        needs_confirmation = True
+    else:
+        _w(f"REJECTED: Score too low ({score:.3f} < 0.5)")
         raise HTTPException(
             status_code=404,
             detail="죄송합니다. 질문하신 내용과 관련된 답변을 제공할 수 없습니다. "
             "다른 질문을 해주시면 도와드리겠습니다.",
             headers={"Access-Control-Allow-Origin": "*"}
         )
+    
+    # 대안 질문 추출
+    alternative_questions = None
+    if len(results_with_score) > 1 and needs_confirmation:
+        alternative_questions = [
+            d.page_content for d, s in results_with_score[1:min(3, len(results_with_score))]
+        ]
+        _w(f"Alternative questions found: {len(alternative_questions)}")
 
-    answer = doc.metadata.get("answer")
-    matched_question = doc.page_content
-
-    if DEBUG_WORKFLOW:
-        _w(f"matched_question='{matched_question}'")
-        _w(f"returning_answer='{answer}'")
+    # 상세 로그
+    _w(f"Top-{len(results_with_score)} search results:")
+    for i, (d, s) in enumerate(results_with_score):
+        _w(f"  [{i+1}] Score: {s:.4f} | Question: '{d.page_content[:60]}...'")
+    
+    _w(f"[5/5] Final decision:")
+    _w(f"  - Matched question: '{matched_question}'")
+    _w(f"  - Similarity score: {score:.4f}")
+    _w(f"  - Confidence: {confidence}")
+    _w(f"  - Needs confirmation: {needs_confirmation}")
+    _w(f"  - Answer length: {len(answer) if answer else 0} chars")
 
     if answer is None:
+        _w("ERROR: Answer metadata is None")
         raise HTTPException(
             status_code=500, 
             detail="검색 결과에 유효한 답변 메타데이터가 없습니다.",
             headers={"Access-Control-Allow-Origin": "*"}
         )
 
+    total_time = time.time() - start_time
+    _w(f"=== CHAT REQUEST COMPLETE (Total: {total_time:.3f}s) ===")
+    _w("=" * 60)
+
     return ChatResponse(
-        answer=answer, matched_question=matched_question, score=float(score)
+        answer=answer,
+        matched_question=matched_question,
+        score=float(score),
+        confidence=confidence,
+        needs_confirmation=needs_confirmation,
+        alternative_questions=alternative_questions,
+        threshold_used=0.5
     )
 
 
@@ -245,38 +316,40 @@ def on_startup() -> None:
     # Qdrant 연결 시도 (최대 3번 재시도)
     import time
     max_retries = 3
+    _w("Starting Qdrant connection attempts...")
+    
     for attempt in range(1, max_retries + 1):
         try:
-            _w(f"Attempting to connect to Qdrant (attempt {attempt}/{max_retries})...")
+            _w(f"[Attempt {attempt}/{max_retries}] Connecting to Qdrant...")
             client = get_qdrant_client()
-            # 간단한 연결 테스트
             collections = client.get_collections()
-            _w(f"Qdrant connection successful. Found {len(collections.collections)} collections.")
+            _w(f"✓ Connected. Found {len(collections.collections)} collections.")
             
             # 컬렉션 확인
             try:
-                _ = client.get_collection(collection_name=QDRANT_COLLECTION)
-                # 컬렉션이 있으면 벡터스토어만 연결 시도 (업서트는 생략)
+                collection_info = client.get_collection(collection_name=QDRANT_COLLECTION)
+                _w(f"✓ Collection '{QDRANT_COLLECTION}' exists")
+                _w(f"  Points count: {collection_info.points_count}")
+                _w(f"  Vectors count: {collection_info.vectors_count}")
                 _ = get_vectorstore()
-                _w("existing collection detected, startup completed without reimport")
+                _w("✓ Startup completed - using existing collection")
                 return
-            except Exception:
-                # 컬렉션이 없으면 초기화
-                _w(f"Collection '{QDRANT_COLLECTION}' not found, initializing...")
+            except Exception as coll_exc:
+                _w(f"✗ Collection '{QDRANT_COLLECTION}' not found: {coll_exc}")
+                _w("Initializing database with Excel data...")
                 initialize_db_and_data(EXCEL_PATH)
-                _w("Database initialized successfully")
+                _w("✓ Database initialized successfully")
                 return
         except Exception as exc:
-            _w(f"Qdrant connection attempt {attempt} failed: {type(exc).__name__}: {exc}")
+            _w(f"✗ Connection attempt {attempt} failed: {type(exc).__name__}: {exc}")
             if attempt < max_retries:
-                wait_time = attempt * 2  # 2초, 4초, 6초 대기
-                _w(f"Waiting {wait_time} seconds before retry...")
+                wait_time = attempt * 2
+                _w(f"  Waiting {wait_time}s before retry...")
                 time.sleep(wait_time)
             else:
-                # 모든 재시도 실패
-                _w("All connection attempts failed.")
-                _w("Service will start but Qdrant operations will fail until connection is established")
-                _w("You can manually initialize using /admin/init endpoint once Qdrant is available")
+                _w("✗ All connection attempts failed")
+                _w("⚠ Service will start but Qdrant operations will fail")
+                _w("  Use /admin/init endpoint once Qdrant is available")
 
 
 @app.post("/admin/init")
@@ -290,10 +363,11 @@ def admin_init() -> Dict[str, Any]:
 
     try:
         vs, cnt = initialize_db_and_data(EXCEL_PATH)
+        
         return {
             "status": "ok",
             "collection": QDRANT_COLLECTION,
-            "inserted": cnt,
+            "inserted": cnt
         }
     except Exception as exc:
         _w(f"/admin/init failed: {exc}")
