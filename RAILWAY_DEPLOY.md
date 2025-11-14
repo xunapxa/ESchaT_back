@@ -56,23 +56,28 @@ Railway는 파일 시스템이 임시이므로, 엑셀 파일을 저장소에 �
 
 ## 빌드 타임아웃 해결
 
-빌드 타임아웃이 발생하는 경우:
+빌드 타임아웃이 계속 발생하는 경우:
 
-1. **Dockerfile 사용** (권장)
-   - 프로젝트에 `Dockerfile`이 있으면 Railway가 자동으로 사용
-   - 더 효율적인 빌드 프로세스
+### 방법 1: Railway 설정에서 타임아웃 증가 (권장)
+1. Railway 대시보드 → 서비스 선택
+2. **Settings** → **Build & Deploy** 탭
+3. **Build timeout** 설정을 **30분** 또는 **60분**으로 증가
+4. 저장 후 재배포
 
-2. **.railwayignore 파일**
-   - 불필요한 파일 제외로 빌드 시간 단축
-   - `__pycache__`, `.history` 등 자동 제외
+### 방법 2: Procfile 사용 (Dockerfile 대신)
+Dockerfile이 타임아웃을 유발하는 경우:
+1. Dockerfile을 임시로 이름 변경: `Dockerfile.bak`
+2. Railway가 자동으로 Procfile 사용
+3. Procfile이 더 관대한 타임아웃 정책 적용
 
-3. **Railway 설정에서 타임아웃 증가**
-   - 서비스 → Settings → Build & Deploy
-   - Build timeout 설정 확인/증가
+### 방법 3: Dockerfile 최적화
+- pip timeout 증가 (이미 적용됨)
+- 불필요한 패키지 제외
+- 멀티스테이지 빌드 사용
 
-4. **재배포**
-   - 변경사항 커밋 후 자동 재배포
-   - Dockerfile 사용 시 더 빠른 빌드
+### 방법 4: .railwayignore 파일
+- 불필요한 파일 제외로 빌드 시간 단축
+- `__pycache__`, `.history` 등 자동 제외
 
 ## 주의사항
 
