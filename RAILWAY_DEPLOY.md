@@ -24,22 +24,33 @@ QDRANT__SERVICE__HTTP_HOST=0.0.0.0
 
 ### 3. 환경 변수 설정
 
-**FastAPI 서비스의 환경 변수 설정:**
+**옵션 A: Qdrant Cloud 사용 (권장 - 더 안정적)**
+
+1. [Qdrant Cloud](https://cloud.qdrant.io)에서 무료 클러스터 생성
+2. 클러스터 URL과 API Key 복사
+3. FastAPI 서비스의 Variables에 설정:
 
 ```
-QDRANT_URL=https://qdrant-production-xxxx.up.railway.app  (공개 URL 사용 권장)
-또는
-QDRANT_URL=http://qdrant:6333  (내부 네트워크 - IPv6 문제로 작동하지 않을 수 있음)
+QDRANT_URL=https://your-cluster-url.cloud.qdrant.io
+QDRANT_API_KEY=your-api-key-here
+QDRANT_COLLECTION=qa_collection
+QA_EXCEL_PATH=ESTSoft.xlsx
+DEBUG_WORKFLOW=0
+```
+
+**옵션 B: Railway Qdrant 서비스 사용**
+
+```
+QDRANT_URL=https://qdrant-production-xxxx.up.railway.app
 QDRANT_COLLECTION=qa_collection
 QA_EXCEL_PATH=ESTSoft.xlsx
 DEBUG_WORKFLOW=0
 ```
 
 **참고**: 
+- **Qdrant Cloud 사용을 강력히 권장** (더 안정적이고 빠름)
 - Railway의 Qdrant는 내부 네트워크 연결에 IPv6 문제가 있을 수 있음
-- **공개 URL 사용을 권장** (더 안정적)
-- Qdrant 서비스의 공개 URL은 `https://서비스이름.up.railway.app` 형식
-- Qdrant Cloud 사용도 가능: [Qdrant Cloud](https://cloud.qdrant.io)
+- Qdrant Cloud는 무료 티어 제공 (제한적이지만 충분함)
 
 ### 4. 엑셀 파일 업로드
 Railway는 파일 시스템이 임시이므로, 엑셀 파일을 저장소에 포함시키거나:

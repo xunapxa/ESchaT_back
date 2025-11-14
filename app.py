@@ -35,8 +35,8 @@ APP_NAME = "eschaT-qa-backend"
 load_dotenv(dotenv_path=os.getenv("ENV_FILE", ".env"))
 
 # 환경 변수 (배포/로컬 모두에서 작동)
-QDRANT_URL = os.getenv("QDRANT_URL", "https://qdrant-production-2c5c.up.railway.app")
-QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
+QDRANT_URL = os.getenv("QDRANT_URL", "https://33730b84-aaaf-43ec-afe5-e76833295247.europe-west3-0.gcp.cloud.qdrant.io")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY","eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIn0.Hs4jkv-vbxm2LjTFQCTqJSWYeh1sgEjj1KEC6P9fKzg")
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "qa_collection")
 EXCEL_PATH = os.getenv("QA_EXCEL_PATH", "Q&A.xlsx")
 # 요구사항 명시 모델 고정
@@ -103,6 +103,18 @@ def build_embeddings() -> SentenceTransformerEmbeddings:
 def initialize_db_and_data(filepath: str) -> Tuple[LCQdrant, int]:
     _w("=== DB initialization started ===")
     _w(f"target_excel='{filepath}'")
+    
+    # 먼저 Qdrant 연결 테스트
+    _w("Testing Qdrant connection before initialization...")
+    client = get_qdrant_client()
+    try:
+        # 간단한 연결 테스트
+        client.get_collections()
+        _w("Qdrant connection test successful")
+    except Exception as conn_exc:
+        _w(f"Qdrant connection test failed: {conn_exc}")
+        raise ConnectionError(f"Failed to connect to Qdrant: {conn_exc}") from conn_exc
+    
     df = read_excel_flex(filepath)
     qa_rows = parse_qa_data(df)
     _w(f"parsed_pairs={len(qa_rows)}")
@@ -117,6 +129,13 @@ def initialize_db_and_data(filepath: str) -> Tuple[LCQdrant, int]:
     ]
 
     embeddings = build_embeddings()
+
+    # 컬렉션이 있으면 삭제 후 재생성
+    try:
+        client.delete_collection(collection_name=QDRANT_COLLECTION)
+        _w(f"Deleted existing collection '{QDRANT_COLLECTION}'")
+    except Exception:
+        _w(f"Collection '{QDRANT_COLLECTION}' does not exist, creating new one")
 
     vs = LCQdrant.from_documents(
         documents=docs,
@@ -209,32 +228,40 @@ def on_startup() -> None:
         return
 
     # Qdrant 연결 시도 (최대 3번 재시도)
+    import time
     max_retries = 3
     for attempt in range(1, max_retries + 1):
         try:
             _w(f"Attempting to connect to Qdrant (attempt {attempt}/{max_retries})...")
             client = get_qdrant_client()
-            _ = client.get_collection(collection_name=QDRANT_COLLECTION)
-            # 컬렉션이 있으면 벡터스토어만 연결 시도 (업서트는 생략)
-            _ = get_vectorstore()
-            _w("existing collection detected, startup completed without reimport")
-            return
+            # 간단한 연결 테스트
+            collections = client.get_collections()
+            _w(f"Qdrant connection successful. Found {len(collections.collections)} collections.")
+            
+            # 컬렉션 확인
+            try:
+                _ = client.get_collection(collection_name=QDRANT_COLLECTION)
+                # 컬렉션이 있으면 벡터스토어만 연결 시도 (업서트는 생략)
+                _ = get_vectorstore()
+                _w("existing collection detected, startup completed without reimport")
+                return
+            except Exception:
+                # 컬렉션이 없으면 초기화
+                _w(f"Collection '{QDRANT_COLLECTION}' not found, initializing...")
+                initialize_db_and_data(EXCEL_PATH)
+                _w("Database initialized successfully")
+                return
         except Exception as exc:
-            _w(f"Qdrant connection attempt {attempt} failed: {exc}")
+            _w(f"Qdrant connection attempt {attempt} failed: {type(exc).__name__}: {exc}")
             if attempt < max_retries:
-                import time
                 wait_time = attempt * 2  # 2초, 4초, 6초 대기
                 _w(f"Waiting {wait_time} seconds before retry...")
                 time.sleep(wait_time)
             else:
-                # 모든 재시도 실패 시 데이터 초기화 시도
-                _w("All connection attempts failed. Attempting to initialize database...")
-                try:
-                    initialize_db_and_data(EXCEL_PATH)
-                    _w("Database initialized successfully")
-                except Exception as init_exc:
-                    _w(f"Database initialization failed: {init_exc}")
-                    _w("Service will start but Qdrant operations will fail until connection is established")
+                # 모든 재시도 실패
+                _w("All connection attempts failed.")
+                _w("Service will start but Qdrant operations will fail until connection is established")
+                _w("You can manually initialize using /admin/init endpoint once Qdrant is available")
 
 
 @app.post("/admin/init")
