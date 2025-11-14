@@ -1,0 +1,39 @@
+# Python venv and cache
+.venv/
+env/
+venv/
+__pycache__/
+*.pyc
+
+# VS Code / IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment / secrets
+.env
+
+# Data / artifacts
+*.sqlite3
+*.db
+*.log
+
+# Compiled outputs
+build/
+dist/
+
+# Node modules (front-end legacy)
+node_modules/
+
+# Coverage / reports
+.coverage
+htmlcov/
+
+# Qdrant dumps (if any)
+qdrant_storage/
+*.qdrant
+
+.history/
